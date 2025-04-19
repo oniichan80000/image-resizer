@@ -56,6 +56,7 @@ const ImageUploader: React.FC = () => {
             .then(response => {
                 const secureProcessedUrl = response.data.processedUrl;
                 console.log("Polling successful. Received presigned GET URL:", secureProcessedUrl);
+                setErrorMessage(null)
                 setProcessedImageUrl(secureProcessedUrl);
                 setStatusMessage('Processing complete.');
                 stopPolling(); // Stop polling on success
