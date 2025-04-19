@@ -4,6 +4,7 @@ import json
 import logging
 import uuid
 import re
+from botocore.config import Config
 
 # Configure logger
 logger = logging.getLogger()
@@ -15,7 +16,7 @@ REGION = os.environ.get('AWS_REGION', 'us-east-1') # Replace default with your s
 UPLOAD_BUCKET = os.environ.get('UPLOAD_BUCKET_NAME', 'imageresizer-imageuploads') # Replace with your source bucket
 
 # Initialize S3 client
-s3_client = boto3.client('s3', region_name=REGION, config=boto3.Config(signature_version='s3v4'))
+s3_client = boto3.client('s3', region_name=REGION, config=Config(signature_version='s3v4'))
 
 def lambda_handler(event, context):
     """
@@ -26,7 +27,7 @@ def lambda_handler(event, context):
 
     # Default values
     # Generate a unique key to prevent collisions and add basic structure
-    object_key = f"uploads/{uuid.uuid4()}"
+    object_key = f"{uuid.uuid4()}"
     content_type = 'image/jpeg' # Default content type
 
     # Try to get filename and content type from the request body (for POST)
@@ -41,7 +42,7 @@ def lambda_handler(event, context):
                  # Sanitize filename: remove potentially unsafe characters, limit length
                  safe_filename = re.sub(r'[^\w\.\-]', '', filename) # Allow word chars, dots, hyphens
                  safe_filename = safe_filename[:100] # Limit length
-                 object_key = f"uploads/{uuid.uuid4()}-{safe_filename}" # Combine UUID and safe filename
+                 object_key = f"{uuid.uuid4()}-{safe_filename}" # Combine UUID and safe filename
                  logger.info(f"Using filename from body: {safe_filename}")
 
             if req_content_type:
