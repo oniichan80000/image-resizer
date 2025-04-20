@@ -26,6 +26,8 @@ const ImageUploader: React.FC = () => {
     const [errorMessage, setErrorMessage] = useState<string | null>(null);
     const [processedImageUrl, setProcessedImageUrl] = useState<string | null>(null);
     const [statusMessage, setStatusMessage] = useState<string>('');
+    const [customDimension, setCustomDimension] = useState<string>(''); // Store as string from input
+
 
     // Ref to store the polling interval ID to clear it later
     const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
@@ -115,10 +117,34 @@ const ImageUploader: React.FC = () => {
             // 1. Get Presigned URL from our backend API
             const apiEndpoint = `${API_GATEWAY_URL}/generate-upload-url`; // Append resource path
             console.log(`Requesting URL from: ${apiEndpoint}`);
-            const response = await axios.post<PresignedUrlResponse>(apiEndpoint, {
-                filename: selectedFile.name,
-                contentType: selectedFile.type
-            });
+
+            const requestData: {
+                filename: string;
+                contentType: string;
+                maxDimension?: number; // Make it optional
+            } = {
+                filename: selectedFile!.name, // Use non-null assertion if check done above
+                contentType: selectedFile!.type
+            };
+
+            console.log("Custom Dimension State:", customDimension);
+    
+            const dimensionValue = parseInt(customDimension, 10);
+
+            console.log("Parsed Dimension Value:", dimensionValue);
+
+            if (!isNaN(dimensionValue) && dimensionValue > 0) {
+                console.log("Condition PASSED. Adding maxDimension:", dimensionValue);
+                requestData.maxDimension = dimensionValue; // Add only if valid number > 0
+            } else {
+                // Log failure reason
+                console.log(`Condition FAILED. dimensionValue: ${dimensionValue}, isNaN: ${isNaN(dimensionValue)}, >0: ${dimensionValue > 0}. Not adding maxDimension.`);
+            }
+
+            console.log("Final requestData before sending:", requestData); // Log the object being sent
+
+            const response = await axios.post<PresignedUrlResponse>(apiEndpoint, requestData);
+
 
             const { uploadUrl, key } = response.data;
             console.log("Received presigned URL:", uploadUrl);
@@ -126,11 +152,28 @@ const ImageUploader: React.FC = () => {
 
             setStatusMessage('Uploading...');
 
+            // Create headers object, starting with Content-Type
+            const uploadHeaders: { [key: string]: string } = {
+                'Content-Type': selectedFile.type, // Make sure selectedFile is non-null here
+            };
+
+            // Conditionally add the metadata header if customDimension is valid
+            //const dimensionValue = parseInt(customDimension, 10);
+            if (!isNaN(dimensionValue) && dimensionValue > 0) {
+                // Key MUST be lowercase 'x-amz-meta-max-dimension'
+                // Value MUST be a string
+                uploadHeaders['x-amz-meta-max-dimension'] = String(dimensionValue);
+                console.log("Adding header x-amz-meta-max-dimension:", String(dimensionValue)); // Log added header
+            } else {
+                console.log("Not adding x-amz-meta-max-dimension header."); // Log if not added
+            }
+
+            console.log("Final headers being sent:", uploadHeaders); // Log the complete headers object
+
+
             // 2. Upload the file directly to S3 using the presigned URL
             await axios.put(uploadUrl, selectedFile, {
-                headers: {
-                    'Content-Type': selectedFile.type, // Crucial for S3
-                },
+                headers: uploadHeaders, // Pass the constructed headers
                 onUploadProgress: (progressEvent) => {
                     const percentCompleted = Math.round(
                         (progressEvent.loaded * 100) / (progressEvent.total ?? 1) // Handle potential null total
@@ -215,6 +258,16 @@ const ImageUploader: React.FC = () => {
         <div>
             <h2>Image Resizer Uploader</h2>
             <input type="file" accept="image/*" onChange={handleFileChange} disabled={isUploading} />
+            <br /> {/* Added for spacing */}
+            <input
+                type="number"
+                placeholder="Max Size (default 256)"
+                value={customDimension}
+                onChange={(e) => setCustomDimension(e.target.value)}
+                disabled={isUploading}
+                style={{ marginTop: '5px', marginBottom: '5px', width: '180px' }} // Basic styling
+            />
+            <br /> {/* Added for spacing */}
             <button onClick={handleUpload} disabled={!selectedFile || isUploading}>
                 {isUploading ? `Uploading (${uploadProgress}%)` : "Upload Image"}
             </button>
