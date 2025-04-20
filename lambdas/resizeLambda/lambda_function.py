@@ -3,14 +3,19 @@ import os
 import io
 from PIL import Image
 import urllib.parse
+import logging
+
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
 
 # Initialize S3 client
 s3_client = boto3.client('s3')
 
 # Get destination bucket name from environment variable
 DESTINATION_BUCKET = os.environ.get('DESTINATION_BUCKET_NAME', 'imageresizer-imageprocessed')
-MAX_SIZE = 256
-
+DEFAULT_MAX_SIZE = 256
+MIN_RESIZE_DIMENSION = 64
+MAX_RESIZE_DIMENSION = 4096
 def lambda_handler(event, context):
     """
     Handles S3 put events, downloads image, resizes if needed, uploads to destination.
@@ -39,30 +44,53 @@ def lambda_handler(event, context):
             response = s3_client.get_object(Bucket=source_bucket, Key=source_key)
             image_data = response['Body'].read()
             content_type = response.get('ContentType', 'image/jpeg') # Default to jpeg if not specified
+            metadata = response.get('Metadata', {}) # Get object metadata
             print(f"Downloaded {source_key} from {source_bucket}. ContentType: {content_type}")
         except Exception as e:
             print(f"Error downloading from S3: {e}")
             raise e # Fail the function execution
 
-        # 3. Image Resizing Logic using Pillow
+        # --- Determine Max Size ---
+        max_size = DEFAULT_MAX_SIZE # Start with default
+        max_size_str = metadata.get('max-dimension') # Metadata keys are lowercased by boto3/S3
+
+        if max_size_str:
+            try:
+                parsed_size = int(max_size_str)
+                # Validate against resize limits
+                if MIN_RESIZE_DIMENSION <= parsed_size <= MAX_RESIZE_DIMENSION:
+                     max_size = parsed_size
+                     logger.info(f"Using custom max dimension from metadata: {max_size}px")
+                else:
+                     logger.warning(f"Invalid custom dimension '{max_size_str}' in metadata (out of range {MIN_RESIZE_DIMENSION}-{MAX_RESIZE_DIMENSION}). Using default {DEFAULT_MAX_SIZE}px.")
+            except ValueError:
+                logger.warning(f"Non-integer custom dimension '{max_size_str}' in metadata. Using default {DEFAULT_MAX_SIZE}px.")
+        else:
+             logger.info(f"No custom dimension in metadata. Using default {DEFAULT_MAX_SIZE}px.")
+        # --------------------------
+
+        # 3. Image Resizing Logic
         with Image.open(io.BytesIO(image_data)) as img:
+             # handle potential image loading errors
+            try:
+                img.verify() # Verify image data integrity if possible
+                # Re-open after verify
+                img = Image.open(io.BytesIO(image_data))
+            except Exception as img_err:
+                logger.error(f"Invalid image format or error opening image {source_key}: {img_err}", exc_info=True)
+                # Optional: You could try to put the original object in destination or just fail
+                raise ValueError(f"Could not process image file: {source_key}") from img_err
+
             original_width, original_height = img.size
             print(f"Original dimensions: {original_width}x{original_height}")
 
-            # Check if resizing is needed
-            if original_width > MAX_SIZE or original_height > MAX_SIZE:
-                print("Resizing required.")
-                # Calculate new dimensions maintaining aspect ratio
-                if original_width > original_height:
-                    new_width = MAX_SIZE
-                    new_height = int(original_height * MAX_SIZE / original_width)
-                else:
-                    new_height = MAX_SIZE
-                    new_width = int(original_width * MAX_SIZE / original_height)
-
-                # Pillow's thumbnail modifies in place and maintains aspect ratio
-                # It ensures *neither* dimension exceeds the provided size tuple.
-                img.thumbnail((MAX_SIZE, MAX_SIZE))
+            if original_width <= max_size and original_height <= max_size:
+                logger.info(f"Image dimensions ({original_width}x{original_height}) are within target max size ({max_size}px). No resizing needed.")
+                output_data = io.BytesIO(image_data) # Use original data
+            else:
+                logger.info(f"Resizing required to fit max dimension {max_size}px.")
+                # Use thumbnail to resize inplace maintaining aspect ratio
+                img.thumbnail((max_size, max_size))
                 resized_width, resized_height = img.size
                 print(f"Resized dimensions: {resized_width}x{resized_height}")
 
@@ -81,11 +109,6 @@ def lambda_handler(event, context):
                 buffer.seek(0)
                 output_data = buffer
                 print(f"Image resized and saved to buffer in {img_format} format.")
-
-            else:
-                # No resizing needed, use original data
-                print("No resizing needed.")
-                output_data = io.BytesIO(image_data) # Use original data in a BytesIO object
 
         # 4. Upload the resulting file back to Destination S3
         # Use the same key name in the destination bucket
